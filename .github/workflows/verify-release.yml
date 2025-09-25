@@ -1,0 +1,36 @@
+name: verify-release
+on:
+  push:
+    tags:
+      - 'v*'
+permissions:
+  contents: write
+jobs:
+  verify-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Verify tag signature (SSH)
+        run: |
+          git config gpg.format ssh
+          git config gpg.ssh.allowedSignersFile security/allowed_signers
+          git verify-tag "${GITHUB_REF_NAME}"
+      - name: Install syft (per-run)
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Build SBOM + checksum
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          syft dir:. --source-name "${{ github.repository }}" --source-version "$TAG" -o cyclonedx-json=sbom-"$TAG".cdx.json -q
+          git archive --format=tar.gz --output="release-$TAG.tar.gz" --prefix="${{ github.event.repository.name }}-$TAG/" "$TAG"
+          shasum -a 256 "release-$TAG.tar.gz" > "release-$TAG.tar.gz.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            sbom-${{ github.ref_name }}.cdx.json
+            release-${{ github.ref_name }}.tar.gz
+            release-${{ github.ref_name }}.tar.gz.sha256
